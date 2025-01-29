@@ -80,9 +80,223 @@ sleep(klient->czas_obslugi);
 
 
 
+## Działanie projektu
+
+1. **Struktury**
+   
+   Klient
+   ```c
+   typedef struct {
+    int id; // ID klienta
+    int czas_obslugi; // Czas obsługi klienta w sekundach
+   } Klient;
+   ```
+   Kasa
+   ```c
+   typedef struct {
+    int id; // ID kasy
+    int liczba_klientow; // Liczba klientów w kolejce
+    Klient *kolejka[MAX_KLIENTOW]; // Kolejka klientów
+    pthread_mutex_t mutex; // Mutex dla kolejki
+    pthread_cond_t cond; // Zmienna warunkowa dla klientów
+    int czynna; // Flaga oznaczająca, czy kasa jest czynna
+   } Kasa;
+   ```
 
 
+   
+2. **Zasada działania funkcji w projekcie**
+
+   **klient:**
+   
+   1.Zwiększenie liczby klientow w sklepie
+   ```c
+   pthread_mutex_lock(&mutex_klienci);
+    liczba_klientow_w_sklepie++;
+    pthread_mutex_unlock(&mutex_klienci);
+   ```
+
+   2.Klient chodzi przez pewien losowy czas po sklepie
+   ```c
+   sleep(rand() % 10 + 1); //losowy czas między 1 a 10 sekund
+   ```
+
+   3.Klient szuka dostępnej kasy z najkrótszą kolejką
+
+   ```c
+   int wybrana_kasa = -1;
+    while (!pożar && wybrana_kasa == -1) {
+        int min_klientow = MAX_KLIENTOW + 1;
+        for (int i = 0; i < MAX_KASY; i++) {
+            pthread_mutex_lock(&kasy[i].mutex);
+            if (kasy[i].czynna && kasy[i].liczba_klientow < min_klientow) {
+                wybrana_kasa = i;
+                min_klientow = kasy[i].liczba_klientow;
+            }
+            pthread_mutex_unlock(&kasy[i].mutex);
+        }
+        if (wybrana_kasa == -1) {
+            sleep(1); // Czekaj i spróbuj ponownie
+        }
+    }
+   ```
+
+   4.Klient ustawia się w kolejce do wybranej kasy
+
+   ```c
+    pthread_mutex_lock(&kasy[wybrana_kasa].mutex);
+    kasy[wybrana_kasa].kolejka[kasy[wybrana_kasa].liczba_klientow++] = klient;
+    pthread_cond_signal(&kasy[wybrana_kasa].cond); // Powiadom kasjera
+    pthread_mutex_unlock(&kasy[wybrana_kasa].mutex);
+   ```
 
 
+   **kasjer**
+
+   1.Kasjer czeka na sygnał o pojawieniu się klienta (ewentualnie o pożarze)
+
+   ```c
+   while (!pożar && kasa->liczba_klientow == 0) {
+      pthread_cond_wait(&kasa->cond, &kasa->mutex);
+   }
+   ```
+
+   2.Kasjer obsługuje pierwszego klienta w kolejce
+
+   ```c
+   Klient *klient = kasa->kolejka[0];
+        for (int i = 0; i < kasa->liczba_klientow - 1; i++) {
+            kasa->kolejka[i] = kasa->kolejka[i + 1];
+        }
+        kasa->liczba_klientow--;
+
+        pthread_mutex_unlock(&kasa->mutex);
+
+        sleep(klient->czas_obslugi); //Symulacja obsługi
+   ```
+
+   3.Kasjer po bosłużeniu klienta aktualizuje liczbe kliwntow w sklepie i zwalnia pamięć po kliencie
+
+   ```c
+   liczba_klientow_w_sklepie--;
+   free(klient);
+   ```
+
+   **kierownik**
+   
+   Kierownik działa w pętli nieskończonej, przerywanej tylko pożarem, 
+
+   1.Oblicza liczbe potrzebnych kas (zawsze conajmniej dwie kasy otwarte)
+
+   ```c
+   int wymagana_liczba_kas = (liczba_klientow_w_sklepie + KLIENTOW_NA_KASE - 1) / KLIENTOW_NA_KASE;
+   if (wymagana_liczba_kas < 2) wymagana_liczba_kas = 2;
+   ```
 
 
+   2.W razie potrzeby zmienia liczbę uruchomionych kas
+
+   ```c
+    if (wymagana_liczba_kas != poprzednia_liczba_kas) {
+            printf("Kierownik: zmiana liczby otwartych kas na %d.\n", wymagana_liczba_kas);
+
+            // Otwieranie dodatkowych kas
+            for (int i = 0; i < MAX_KASY && liczba_otwartych_kas < wymagana_liczba_kas; i++) {
+                if (!kasy[i].czynna) {
+                    kasy[i].czynna = 1;
+                    liczba_otwartych_kas++;
+                }
+            }
+
+            // Zamykanie nadmiarowych kas
+            for (int i = MAX_KASY - 1; i >= 0 && liczba_otwartych_kas > wymagana_liczba_kas; i--) {
+                pthread_mutex_lock(&kasy[i].mutex);
+                if (kasy[i].czynna && kasy[i].liczba_klientow == 0) {
+                    kasy[i].czynna = 0;
+                    liczba_otwartych_kas--;
+                }
+                pthread_mutex_unlock(&kasy[i].mutex);
+            }
+            poprzednia_liczba_kas = wymagana_liczba_kas;
+        }
+   ```
+
+   **strazak**
+
+   1.Czeka losowy czas do uruchomienia alarmu o pożarze
+
+   ```c
+   sleep(rand() % 101 + 20); //losowy czas między 100 a 120 sekund
+   ```
+
+   2.Ustawia zmienną informującą o pożarze
+
+   ```c
+    pthread_mutex_lock(&mutex_pożar);
+    pożar = 1;
+    pthread_mutex_unlock(&mutex_pożar);
+   ```
+
+   3.Powiadamia kasy o pożarze
+
+   ```c
+   for (int i = 0; i < MAX_KASY; i++) {
+      pthread_mutex_lock(&kasy[i].mutex);
+      pthread_cond_broadcast(&kasy[i].cond); // Powiadom wszystkie kasy
+      pthread_mutex_unlock(&kasy[i].mutex);
+    }
+   ```
+
+
+   
+3. **Funkcja main**
+
+   1.Inicjalizuje kasy
+
+   ```c
+   for (int i = 0; i < MAX_KASY; i++) {
+        kasy[i].id = i;
+        kasy[i].liczba_klientow = 0;
+        kasy[i].czynna = (i < 2); // Na początku działają 2 kasy
+        pthread_mutex_init(&kasy[i].mutex, NULL);
+        pthread_cond_init(&kasy[i].cond, NULL);
+        if (i < 2) liczba_otwartych_kas++;
+        pthread_create(&watek_kasjerow[i], NULL, kasjer, &kasy[i]);
+    }
+   ```
+
+   2.Utworzenie wątku strażaka i kierownika
+
+   ```c
+   pthread_create(&watek_strazak, NULL, strazak, NULL);
+   pthread_create(&watek_kierownik, NULL, kierownik, NULL);
+   ```
+
+   3.Generowanie klientów co 1-3 sekundy (przerwanie gdy wybuchnie pożar)
+
+   ```c
+       while (!pożar) {
+        sleep(rand() % 3 + 1); // Nowy klient co 1-3 sekundy
+
+        // Tworzenie nowego klienta
+        Klient *nowy_klient = (Klient *)malloc(sizeof(Klient));
+        nowy_klient->id = id_klienta++;
+        nowy_klient->czas_obslugi = rand() % 10 + 1;
+
+        // Tworzenie wątku dla klienta
+        pthread_t klient_watek;
+        pthread_create(&klient_watek, NULL, klient, nowy_klient);
+        pthread_detach(klient_watek);
+    }
+   ```
+
+   4.Oczekiwanie na zamknięcie wszystkich wątków
+
+   ```c
+    pthread_join(watek_strazak, NULL);
+    for (int i = 0; i < MAX_KASY; i++) {
+        pthread_join(watek_kasjerow[i], NULL);
+    }
+    pthread_join(watek_kierownik, NULL);
+   ```
+   
