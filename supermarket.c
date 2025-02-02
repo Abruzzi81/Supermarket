@@ -1,240 +1,148 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <pthread.h>
 #include <unistd.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <sys/shm.h>
+#include "common.h"
 
-#define MAX_KLIENTOW 100
-#define MAX_KASY 10
-#define KLIENTOW_NA_KASE 5 // K - liczba klientów przypadająca na kasę
+#define SHM_SIZE sizeof(int) + sizeof(pthread_mutex_t) // pamięć dla int + mutex
 
-typedef struct {
-    int id; // ID klienta
-    int czas_obslugi; // Czas obsługi klienta w sekundach
-} Klient;
+int msgid; //id kolejki komunikatow
+void *shm_addr; //wskaznik do przylaczonego segmentu pamieci dzielonej
+int shmid;
 
-typedef struct {
-    int id; // ID kasy
-    int liczba_klientow; // Liczba klientów w kolejce
-    Klient *kolejka[MAX_KLIENTOW]; // Kolejka klientów
-    pthread_mutex_t mutex; // Mutex dla kolejki
-    pthread_cond_t cond; // Zmienna warunkowa dla klientów
-    int czynna; // Flaga oznaczająca, czy kasa jest czynna
-} Kasa;
-
-Kasa kasy[MAX_KASY];
-int liczba_klientow_w_sklepie = 0; // Liczba klientów w sklepie
-int pożar = 0; // Flaga oznaczająca, czy jest pożar
-int liczba_otwartych_kas = 0; // Globalna liczba otwartych kas (zawsze >= 2)
-
-pthread_mutex_t mutex_pożar = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t mutex_klienci = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t mutex_kasy = PTHREAD_MUTEX_INITIALIZER;
-
-// Funkcja obsługi klienta
-void *klient(void *arg) {
-    Klient *klient = (Klient *)arg;
-
-    pthread_mutex_lock(&mutex_klienci);
-    liczba_klientow_w_sklepie++;
-    pthread_mutex_unlock(&mutex_klienci);
-
-    printf("Klient %d wchodzi do sklepu.\n", klient->id);
-	//Klient chodzi po sklepie
-	sleep(rand() % 10 + 1);
+// Funkcja obsługi sygnału SIGINT
+void handle_sigint(int sig) {
 	
-    // Klient wybiera kasę z najmniejszą liczbą klientów
-    int wybrana_kasa = -1;
-    while (!pożar && wybrana_kasa == -1) {
-        int min_klientow = MAX_KLIENTOW + 1;
-        for (int i = 0; i < MAX_KASY; i++) {
-            pthread_mutex_lock(&kasy[i].mutex);
-            if (kasy[i].czynna && kasy[i].liczba_klientow < min_klientow) {
-                wybrana_kasa = i;
-                min_klientow = kasy[i].liczba_klientow;
-            }
-            pthread_mutex_unlock(&kasy[i].mutex);
-        }
-        if (wybrana_kasa == -1) {
-            sleep(1); // Czekaj i spróbuj ponownie
-        }
+	// Oczekiwanie na zakończenie procesów
+    for (int i = 0; i < MAX_CUSTOMERS + 2; i++) {
+        wait(NULL);
     }
 
-    if (pożar) {
-        printf("Klient %d opuszcza sklep z powodu pożaru.\n", klient->id);
-        pthread_mutex_lock(&mutex_klienci);
-        liczba_klientow_w_sklepie--;
-        pthread_mutex_unlock(&mutex_klienci);
-        free(klient);
-        return NULL;
+    // Usunięcie kolejki komunikatów
+    msgctl(msgid, IPC_RMID, NULL);
+	
+	
+	// Odłączenie segmentu pamięci dzielonej
+    if (shmdt(shm_addr) == -1) {
+        perror("shmdt");
+        exit(1);
     }
-
-    // Dodanie klienta do kolejki wybranej kasy
-    pthread_mutex_lock(&kasy[wybrana_kasa].mutex);
-    kasy[wybrana_kasa].kolejka[kasy[wybrana_kasa].liczba_klientow++] = klient;
-    printf("Klient %d ustawia się w kolejce do kasy %d.\n", klient->id, wybrana_kasa);
-    pthread_cond_signal(&kasy[wybrana_kasa].cond); // Powiadom kasjera
-    pthread_mutex_unlock(&kasy[wybrana_kasa].mutex);
-
-    return NULL;
-}
-
-// Funkcja obsługi kasy
-void *kasjer(void *arg) {
-    Kasa *kasa = (Kasa *)arg;
-
-    while (1) {
-        pthread_mutex_lock(&kasa->mutex);
-
-        // Sprawdzaj, czy jest pożar
-        if (pożar) {
-            printf("Kasa %d zamyka się z powodu pożaru.\n", kasa->id);
-            kasa->czynna = 0;
-            pthread_mutex_unlock(&kasa->mutex);
-            return NULL;
-        }
-
-        // Czekaj na klienta, jeśli kolejka jest pusta
-        while (!pożar && kasa->liczba_klientow == 0) {
-            pthread_cond_wait(&kasa->cond, &kasa->mutex);
-        }
-
-        if (pożar) {
-            printf("Kasa %d zamyka się z powodu pożaru.\n", kasa->id);
-            kasa->czynna = 0;
-            pthread_mutex_unlock(&kasa->mutex);
-            return NULL;
-        }
-
-        // Obsługa pierwszego klienta w kolejce
-        Klient *klient = kasa->kolejka[0];
-        for (int i = 0; i < kasa->liczba_klientow - 1; i++) {
-            kasa->kolejka[i] = kasa->kolejka[i + 1];
-        }
-        kasa->liczba_klientow--;
-
-        pthread_mutex_unlock(&kasa->mutex);
-
-        printf("Kasa %d obsługuje klienta %d przez %d sekund.\n", kasa->id, klient->id, klient->czas_obslugi);
-        sleep(klient->czas_obslugi); // Symulacja czasu obsługi klienta
-        printf("Kasa %d zakończyła obsługę klienta %d.\n", kasa->id, klient->id);
-		liczba_klientow_w_sklepie--;
-        free(klient);
+	
+	// Usuwanie pamięci dzielonej
+    if (shmctl(shmid, IPC_RMID, NULL) == -1) {
+        perror("shmctl IPC_RMID");
+        exit(1);
     }
-
-    return NULL;
-}
-
-// Funkcja kierownika
-void *kierownik(void *arg) {
-    int poprzednia_liczba_kas = liczba_otwartych_kas;
-
-    while (!pożar) {
-        pthread_mutex_lock(&mutex_klienci);
-        pthread_mutex_lock(&mutex_kasy);
-
-        int wymagana_liczba_kas = (liczba_klientow_w_sklepie + KLIENTOW_NA_KASE - 1) / KLIENTOW_NA_KASE; // Zaokrąglanie w górę
-        if (wymagana_liczba_kas < 2) wymagana_liczba_kas = 2;
-
-        // Sprawdź, czy liczba kas musi się zmienić
-        if (wymagana_liczba_kas != poprzednia_liczba_kas) {
-            printf("Kierownik: zmiana liczby otwartych kas na %d.\n", wymagana_liczba_kas);
-
-            // Otwieranie dodatkowych kas
-            for (int i = 0; i < MAX_KASY && liczba_otwartych_kas < wymagana_liczba_kas; i++) {
-                if (!kasy[i].czynna) {
-                    kasy[i].czynna = 1;
-                    liczba_otwartych_kas++;
-                    printf("Kierownik: Otwieram kasę %d.\n", kasy[i].id);
-                }
-            }
-
-            // Zamykanie nadmiarowych kas
-            for (int i = MAX_KASY - 1; i >= 0 && liczba_otwartych_kas > wymagana_liczba_kas; i--) {
-                pthread_mutex_lock(&kasy[i].mutex);
-                if (kasy[i].czynna && kasy[i].liczba_klientow == 0) {
-                    kasy[i].czynna = 0;
-                    liczba_otwartych_kas--;
-                    printf("Kierownik: Zamykam kasę %d.\n", kasy[i].id);
-                }
-                pthread_mutex_unlock(&kasy[i].mutex);
-            }
-
-            poprzednia_liczba_kas = wymagana_liczba_kas;
-        }
-
-        pthread_mutex_unlock(&mutex_kasy);
-        pthread_mutex_unlock(&mutex_klienci);
-
-        sleep(1); // Sprawdzanie co sekundę
-    }
-    return NULL;
-}
-
-// Funkcja strażaka
-void *strazak(void *arg) {
-    sleep(1000); // Pożar po 10 sekundach
-    printf("Strażak: Sygnał o pożarze! Wszyscy klienci opuszczają sklep.\n");
-
-    pthread_mutex_lock(&mutex_pożar);
-    pożar = 1;
-    pthread_mutex_unlock(&mutex_pożar);
-
-    // Zamykanie wszystkich kas
-    for (int i = 0; i < MAX_KASY; i++) {
-        pthread_mutex_lock(&kasy[i].mutex);
-        pthread_cond_broadcast(&kasy[i].cond); // Powiadom wszystkie kasy
-        pthread_mutex_unlock(&kasy[i].mutex);
-    }
-
-    return NULL;
+	
+	printf("\nSygnał SIGINT odebrany! Proces zakończony.\n");
+    exit(0);  // Zakończenie programu
 }
 
 int main() {
-    pthread_t watek_kasjerow[MAX_KASY];
-    pthread_t watek_strazak, watek_kierownik;
+	// Rejestracja funkcji obsługi sygnału SIGINT
+    if (signal(SIGINT, handle_sigint) == SIG_ERR) {
+        perror("Nie udało się zarejestrować obsługi sygnału");
+        exit(1);
+    }
+	
+	
+    // Inicjalizacja kolejki komunikatów
+    msgid = msgget(IPC_PRIVATE, 0666 | IPC_CREAT);
+    if (msgid == -1) {
+        perror("msgget");
+        exit(1);
+    }
+	
+	// Tworzenie pamięci dzielonej
+	key_t key = ftok("shmfile", 'A');  // Tworzenie unikalnego klucza
+    shmid = shmget(key, SHM_SIZE, IPC_CREAT | 0666);
 
-    // Inicjalizacja kas
-    for (int i = 0; i < MAX_KASY; i++) {
-        kasy[i].id = i;
-        kasy[i].liczba_klientow = 0;
-        kasy[i].czynna = (i < 2); // Na początku działają 2 kasy
-        pthread_mutex_init(&kasy[i].mutex, NULL);
-        pthread_cond_init(&kasy[i].cond, NULL);
-        if (i < 2) liczba_otwartych_kas++;
-        pthread_create(&watek_kasjerow[i], NULL, kasjer, &kasy[i]);
+    if (shmid == -1) {
+        perror("shmget");
+        exit(1);
+    }
+	
+	// Przyłączanie segmentu pamięci dzielonej
+    shm_addr = shmat(shmid, NULL, 0);
+    if (shm_addr == (void *)-1) {
+        perror("shmat");
+        exit(1);
     }
 
-    // Uruchomienie strażaka i kierownika
-    pthread_create(&watek_strazak, NULL, strazak, NULL);
-    pthread_create(&watek_kierownik, NULL, kierownik, NULL);
+    // Inicjalizacja pamięci dzielonej
+    int *shm_ptr = (int *)shm_addr;  // wskaźnik na zmienną int
+    pthread_mutex_t *mutex = (pthread_mutex_t *)(shm_ptr + 1);  // wskaźnik na mutex
 
-    // Generowanie klientów
-    int id_klienta = 0;
-    while (!pożar) {
-        sleep(rand() % 3 + 1); // Nowy klient co 1-3 sekundy
-
-        // Tworzenie nowego klienta
-        Klient *nowy_klient = (Klient *)malloc(sizeof(Klient));
-        nowy_klient->id = id_klienta++;
-        nowy_klient->czas_obslugi = rand() % 10 + 1;
-
-        // Tworzenie wątku dla klienta
-        pthread_t klient_watek;
-        pthread_create(&klient_watek, NULL, klient, nowy_klient);
-        pthread_detach(klient_watek);
+    // Inicjalizacja mutexa w pamięci dzielonej
+    if (pthread_mutex_init(mutex, NULL) != 0) {
+        perror("pthread_mutex_init");
+        exit(1);
     }
 
-    // Czekaj na zakończenie strażaka
-    pthread_join(watek_strazak, NULL);
+    // Ustawienie początkowej wartości w pamięci dzielonej
+    *shm_ptr = 0;
+	
 
-    // Oczekiwanie na zamknięcie wszystkich kas
-    for (int i = 0; i < MAX_KASY; i++) {
-        pthread_join(watek_kasjerow[i], NULL);
+    // Tworzenie procesu kierownika
+    pid_t manager_pid = fork();
+    if (manager_pid == 0) {
+        char msgid_str[20];
+        snprintf(msgid_str, 20, "%d", msgid);
+        execl("./manager", "manager", msgid_str, NULL);
+        perror("execl manager");
+        exit(1);
     }
 
-    // Czekaj na zakończenie kierownika
-    pthread_join(watek_kierownik, NULL);
+    // Tworzenie procesu strażaka
+    pid_t firefighter_pid = fork();
+    if (firefighter_pid == 0) {
+        char msgid_str[20];
+        snprintf(msgid_str, 20, "%d", msgid);
+        execl("./firefighter", "firefighter", msgid_str, NULL);
+        perror("execl firefighter");
+        exit(1);
+    }
 
-    printf("Sklep został zamknięty.\n");
+    // Tworzenie procesów klientów
+    for (int i = 0; i < MAX_CUSTOMERS; i++) {
+        pid_t customer_pid = fork();
+        if (customer_pid == 0) {
+            char customer_id[10];
+            char msgid_str[20];
+            snprintf(customer_id, 10, "%d", i);
+            snprintf(msgid_str, 20, "%d", msgid);
+            execl("./customer", "customer", customer_id, msgid_str, NULL);
+            perror("execl customer");
+            exit(1);
+        }
+        sleep(1);  // Opóźnienie między tworzeniem klientów
+    }
+
+    // Oczekiwanie na zakończenie procesów
+    for (int i = 0; i < MAX_CUSTOMERS + 2; i++) {
+        wait(NULL);
+    }
+
+    // Usunięcie kolejki komunikatów
+    msgctl(msgid, IPC_RMID, NULL);
+	
+	
+	// Odłączenie segmentu pamięci dzielonej
+    if (shmdt(shm_addr) == -1) {
+        perror("shmdt");
+        exit(1);
+    }
+	
+	// Usuwanie pamięci dzielonej
+    if (shmctl(shmid, IPC_RMID, NULL) == -1) {
+        perror("shmctl IPC_RMID");
+        exit(1);
+    }
+
+    printf("Supermarket zamknięty.\n");
     return 0;
 }
