@@ -80,10 +80,55 @@ W projekcie zastosowane zostały 3 główne komponenty:
    
 • 100 klientów
 
-   
+   Czas trwania symulacji: 232.415921 s   =  3 min 52 s
 
 • 1000 klientów
 
    Czas trwania symulacji: 2077.483760 s  =  34 min 37 s
 
+
+## Opis działania poszczególnych modułów
+
+### supermarket.c
+
+**1. Inicjalizacja i obsługa sygnałów**
+
+Program rejestruje funkcję `handle_sigint` jako obsługę sygnału SIGINT (np. gdy użytkownik naciśnie Ctrl+C). Ta funkcja:
+- Oczekuje na zakończenie wszystkich procesów potomnych.
+- Usuwa kolejkę komunikatów.
+- Odłącza i usuwa segment pamięci dzielonej.
+- Kończy działanie programu.
+
+**2. Inicjalizacja kolejki komunikatów**
+- Tworzona jest kolejka komunikatów za pomocą `msgget`. 
+- Kolejka ta będzie używana do komunikacji między procesami.
+
+**3. Inicjalizacja pamięci dzielonej**
+- Tworzony jest segment pamięci dzielonej za pomocą `shmget`. 
+- Pamięć ta będzie przechowywać:
+  - Liczbę całkowitą (`int`), która może być używana np. do zliczania klientów.
+  - Mutex (`pthread_mutex_t`), który będzie synchronizować dostęp do pamięci dzielonej.
+- Pamięć dzielona jest inicjalizowana, a mutex jest inicjalizowany za pomocą `pthread_mutex_init`.
+
+**4. Tworzenie procesów**
+- **Proces kierownika (`manager`)**:  
+  Tworzony jest proces potomny, który uruchamia program `manager` za pomocą `execl`.
+
+- **Proces strażaka (`firefighter`)**:  
+  Tworzony jest kolejny proces potomny, który uruchamia program `firefighter` za pomocą `execl`. 
+
+- **Procesy klientów (`customer`)**:  
+  Tworzonych jest `MAX_CUSTOMERS` procesów potomnych, z których każdy uruchamia program `customer` za pomocą `execl`.  
+  Każdy proces klienta otrzymuje unikalny identyfikator (`customer_id`) oraz ID kolejki komunikatów.  
+  Procesy klientów są tworzone z losowym opóźnieniem (1-5 sekund).
+
+**5. Oczekiwanie na zakończenie procesów**
+- Program główny oczekuje na zakończenie wszystkich procesów klientów za pomocą `wait`.
+
+**6. Zamykanie supermarketu**
+Po zakończeniu wszystkich procesów klientów, program:
+- Usuwa kolejkę komunikatów za pomocą `msgctl`.
+- Odłącza segment pamięci dzielonej za pomocą `shmdt`.
+- Usuwa segment pamięci dzielonej za pomocą `shmctl`.
+- Wysyła sygnał `SIGTERM` do procesów kierownika i strażaka, aby je zakończyć.
 
