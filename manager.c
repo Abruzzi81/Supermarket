@@ -5,11 +5,6 @@ volatile sig_atomic_t fire_alarm = 0;  // Flaga sygnału pożaru
 int msgid;  // Pobierz identyfikator kolejki
 
 
-// Funkcja obsługi sygnału SIGUSR1
-void handle_sigusr1(int sig) {
-    fire_alarm = 1;  // Ustaw flagę pożaru
-}
-
 typedef struct {
     int id; // ID kasy
     int liczba_klientow; // Liczba klientów w kolejce
@@ -21,6 +16,11 @@ typedef struct {
 } Kasa;
 
 Kasa kasy[MAX_CASHIERS];
+
+// Funkcja obsługi sygnału SIGUSR1
+void handle_sigusr1(int sig) {
+    fire_alarm = 1;  // Ustaw flagę pożaru
+}
 
 void* cashier_thread(void *arg) {
 	Kasa *kasa = (Kasa *)arg;
@@ -40,7 +40,6 @@ void* cashier_thread(void *arg) {
             kasa->kolejka[i] = kasa->kolejka[i + 1];
         }
         kasa->liczba_klientow--;
-
         pthread_mutex_unlock(&kasa->mutex);
 		
         // Wysłanie odpowiedzi do klienta
@@ -52,10 +51,7 @@ void* cashier_thread(void *arg) {
 			perror("msgsnd");
 			exit(1);
         }
-/*
-        printf("Klient %d przypisany do kasy %d. Kolejka przy kasie %d: %d\n",
-               klient_id, response.cashier_id, response.cashier_id, kasa->liczba_klientow);
-*/           
+        
 		while(kasa->zajeta) {
 			sleep(1);
 		}
@@ -99,7 +95,7 @@ int main(int argc, char *argv[]) {
     }
 	
 	// Uzyskanie identyfikatora segmentu pamięci dzielonej
-    int shmid = shmget(key, sizeof(int) + sizeof(pthread_mutex_t), 0666);
+    int shmid = shmget(key, sizeof(int) + sizeof(pthread_mutex_t), 0600);
     if (shmid == -1) {
         perror("shmget");
         exit(1);
@@ -124,9 +120,7 @@ int main(int argc, char *argv[]) {
 
       if (msgrcv(msgid, &msg, sizeof(msg), 0, IPC_NOWAIT) != -1) {
 
-
             if (msg.mtype == 1) {  // Klient ustawia się w kolejce
-                printf("Klient %d w kolejce. Liczba klientów: %d\n", msg.customer_id, customer_count);
 
                 // Przydzielenie klienta do kasy z najmniejszą kolejką
                 int selected_cashier = 0;
@@ -135,13 +129,28 @@ int main(int argc, char *argv[]) {
                         selected_cashier = i;
                     }
                 }
+				//	Wysylanie informacji o braku miejsca w kolejce
+				if (kasy[selected_cashier].liczba_klientow >= MAX_QUEUE_SIZE ) {
+					// Wysłanie odpowiedzi do klienta
+					message_t response;
+					response.mtype = (long)(msg.customer_id + 1);  // Unikalny typ komunikatu dla klienta
+					response.customer_id = msg.customer_id;
+					response.cashier_id = -1;  // Brak miejsca w kolejce
+					if (msgsnd(msgid, &response, sizeof(response), 0) == -1) {
+						perror("msgsnd");
+						exit(1);
+					}
+				}
+				else {
+					pthread_mutex_lock(&kasy[selected_cashier].mutex);
+					kasy[selected_cashier].liczba_klientow++;
+					kasy[selected_cashier].kolejka[kasy[selected_cashier].liczba_klientow-1] = msg.customer_id;
+					pthread_cond_signal(&kasy[selected_cashier].cond); // Powiadom kasjera
+					pthread_mutex_unlock(&kasy[selected_cashier].mutex);
 				
-				pthread_mutex_lock(&kasy[selected_cashier].mutex);
-                kasy[selected_cashier].liczba_klientow++;
-				kasy[selected_cashier].kolejka[kasy[selected_cashier].liczba_klientow-1] = msg.customer_id;
-				pthread_cond_signal(&kasy[selected_cashier].cond); // Powiadom kasjera
-				pthread_mutex_unlock(&kasy[selected_cashier].mutex);
-				
+					printf("Klient %d ustawil sie w kolejce do kasy %d\n", msg.customer_id, selected_cashier + 1);		
+				}
+
 			} else if (msg.mtype == 2) {  // Klient opuszcza kasę
                 int cashier_id = msg.cashier_id - 1;  // Numeracja kas od 0
                 kasy[cashier_id].zajeta = 0;
@@ -160,7 +169,7 @@ int main(int argc, char *argv[]) {
         } else if (required_cashiers < active_cashiers && customer_count < K * (active_cashiers - 1)) {
             // Zamknięcie kasy
             active_cashiers--;
-            printf("Kasa zamknięta. Aktywne kasy: %d\n", active_cashiers);
+           printf("Kasa zamknięta. Aktywne kasy: %d\n", active_cashiers);
         }
 
     }
