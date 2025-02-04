@@ -1,8 +1,24 @@
 #include "common.h"
 
 pthread_mutex_t *mutex;
+void *shm_addr;
+int customer_id;
+
+// Funkcja obsługi sygnału SIGUSR1
+void handle_sigusr1(int sig) {
+	
+	printf("Klient %d opuscil sklep\n", customer_id);
+    // Odłączenie segmentu pamięci dzielonej
+    if (shmdt(shm_addr) == -1) {
+        perror("shmdt");
+        exit(1);
+    }
+	kill(getpid(), SIGKILL);  // Wysłanie SIGKILL do własnego procesu
+}
 
 int main(int argc, char *argv[]) {
+	srand(time(NULL));
+	
 	// Tworzenie klucza
     key_t key = ftok("shmfile", 'A');
     if (key == -1) {
@@ -11,14 +27,14 @@ int main(int argc, char *argv[]) {
     }
 
     // Uzyskanie identyfikatora segmentu pamięci dzielonej
-    int shmid = shmget(key, sizeof(int) + sizeof(pthread_mutex_t), 0666);
+    int shmid = shmget(key, sizeof(int) + sizeof(pthread_mutex_t), 0600);
     if (shmid == -1) {
         perror("shmget");
         exit(1);
     }
 	
     // Przyłączanie segmentu pamięci dzielonej
-    void *shm_addr = shmat(shmid, NULL, 0);
+    shm_addr = shmat(shmid, NULL, 0);
     if (shm_addr == (void *)-1) {
         perror("shmat");
         exit(1);
@@ -51,12 +67,16 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Użycie: %s <customer_id> <msgid>\n", argv[0]);
         exit(1);
     }
-    int customer_id = atoi(argv[1]);
+    customer_id = atoi(argv[1]);
     int msgid = atoi(argv[2]);  // Pobierz identyfikator kolejki
+	
+	// Rejestracja obsługi sygnału SIGUSR1
+    signal(SIGUSR1, handle_sigusr1);
+	
     printf("Klient %d wszedł do sklepu.\n", customer_id);
 
-    // Symulacja czasu spędzonego w sklepie
-    sleep(rand() % 5 + 1);
+    // Symulacja czasu spędzonego w sklepie (miedzy 1 a 20 sekund)
+    sleep(rand() % 20 + 1);
 
     // Wysłanie komunikatu do kierownika (ustawienie się w kolejce)
     message_t msg;
@@ -67,8 +87,6 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    printf("Klient %d ustawił się w kolejce do kasy.\n", customer_id);
-
     // Oczekiwanie na odpowiedź od kierownika (przydział do kasy)
     message_t response;
     if (msgrcv(msgid, &response, sizeof(response), customer_id + 1, 0) == -1) {
@@ -76,21 +94,25 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    printf("Klient %d jest obslugiwany przy kasie %d.\n", customer_id, response.cashier_id);
+	if (response.cashier_id == -1) {
+		printf("Klient %d opuscil sklep\n", customer_id);
+	}
+	else {
+		printf("Klient %d jest obslugiwany przy kasie %d.\n", customer_id, response.cashier_id);
 
-    // Symulacja obsługi przy kasie
-    sleep(10);  // Czas obsługi
+		// Symulacja obsługi przy kasie
+		sleep(rand() % 10 + 1);  // Czas obsługi (miedzy 1 a 10 sekund)
 
-    // Wysłanie komunikatu do kierownika (opuszczenie kasy)
-    msg.mtype = 2;  // Typ komunikatu: opuszczenie kasy
-    msg.customer_id = customer_id;
-    msg.cashier_id = response.cashier_id;
-    if (msgsnd(msgid, &msg, sizeof(msg), 0) == -1) {
-        perror("msgsnd");
-        exit(1);
-    }
-
-    printf("Klient %d opuścił sklep po obsłudze przy kasie %d.\n", customer_id, response.cashier_id);
+		// Wysłanie komunikatu do kierownika (opuszczenie kasy)
+		msg.mtype = 2;  // Typ komunikatu: opuszczenie kasy
+		msg.customer_id = customer_id;
+		msg.cashier_id = response.cashier_id;
+		if (msgsnd(msgid, &msg, sizeof(msg), 0) == -1) {
+			perror("msgsnd");
+			exit(1);
+		}
+		printf("Klient %d opuścił sklep po obsłudze przy kasie %d.\n", customer_id, response.cashier_id);
+	}
 
 	// Zmniejszanie liczby klientow w sklepie
 	// Zablokowanie mutexa
