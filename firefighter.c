@@ -12,7 +12,7 @@ int main(int argc, char *argv[]) {
     int msgid = atoi(argv[1]);  // Pobierz identyfikator kolejki
 
     // Symulacja wykrycia pożaru
-    sleep(5);  // Pożar w losowym czasie
+    sleep(rand() % 100 + 20);  // Pożar w losowym czasie
 
     // Wysłanie sygnału do wszystkich procesów
     kill(0, SIGUSR1);  // Wysyłanie sygnału do grupy procesów
