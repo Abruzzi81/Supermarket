@@ -74,6 +74,9 @@ W projekcie zastosowane zostały 3 główne komponenty:
 ## Testy
 
 ### Sprawdzenie czasu działania programu dla różnej ilości klientów
+
+Liczba klientów jest zmieniana za pomocą zmiany wartości `MAX_CUSTOMERS` w pliku `common.c`
+
 • 10 klientów
 
    Czas trwania symulacji: 40.380885 s
@@ -85,6 +88,38 @@ W projekcie zastosowane zostały 3 główne komponenty:
 • 1000 klientów
 
    Czas trwania symulacji: 2077.483760 s  =  34 min 37 s
+
+### Test alarmu pożarowego
+
+Czas alermu został ustawiony na 5s.
+Komunikaty wyśweietlone w terminalu:
+`Klient 0 wszedł do sklepu.`
+
+`Klient 1 wszedł do sklepu.`
+
+`POŻAR! Zamykanie kas...`
+
+`Wszystkie kasy zamknięte. Kierownik kończy działanie.`
+
+`User defined signal 1`
+
+
+Alarm pożarowy działa zgodnie z założeniami. Pożar powoduje zamknięcie kas i zakończenie programu.
+
+### Test sygnału SIGINT
+
+Za pomocą kombinacji klawiszy Ctrl + C wywołany został sygnał SIGINT
+Wynik w terminalu:
+
+`Klient 0 wszedł do sklepu.`
+
+`Klient 1 wszedł do sklepu.`
+
+`^C`
+
+`Sygnał SIGINT odebrany! Proces zakończony.`
+
+Informacja o wysłaniu sygnału została odebrana a program zakończył swoje działanie.
 
 
 ## Opis działania poszczególnych modułów
@@ -132,3 +167,110 @@ Po zakończeniu wszystkich procesów klientów, program:
 - Usuwa segment pamięci dzielonej za pomocą `shmctl`.
 - Wysyła sygnał `SIGTERM` do procesów kierownika i strażaka, aby je zakończyć.
 
+### customer.c
+
+**1. Inicjalizacja pamięci dzielonej i muteksu**
+
+- Tworzy klucz `ftok`, pobiera segment pamięci `shmget`, dołącza go `shmat`.
+- Inicjalizuje wskaźniki do licznika klientów i muteksu.
+
+**2. Modyfikacja licznika klientów**
+
+- Blokuje muteks, zwiększa licznik klientów, zwalnia muteks.
+
+**3. Wejście klienta do sklepu**
+
+- Pobiera `customer_id` i `msgid`, drukuje komunikat, czeka losowy czas (1–20s).
+
+**4. Komunikacja z kierownikiem**
+
+- Wysyła wiadomość `msgsnd` (ustawienie w kolejce).
+- Odbiera wiadomość `msgrcv` (przydział do kasy), drukuje informację.
+
+**5. Obsługa przy kasie**
+
+- Symuluje obsługę (1–10s), wysyła wiadomość o opuszczeniu kasy.
+
+**6. Zmniejszenie licznika klientów**
+
+- Blokuje muteks, zmniejsza licznik, zwalnia muteks.
+
+**7. Zakończenie pracy**
+
+- Odłącza pamięć dzieloną i kończy działanie.
+
+### manager.c
+
+**1. Inicjalizacja i konfiguracja**  
+
+- Program odbiera argument `msgid` – identyfikator kolejki komunikatów.  
+- Tworzy i inicjalizuje kasy (`Kasa`) – każda posiada ID, kolejkę klientów, mutex, zmienną warunkową oraz flagi aktywności i zajętości.  
+- Domyślnie otwarte są 2 kasy.  
+- Tworzy wątki kasjerów (`cashier_thread`), które obsługują klientów.  
+
+**2. Obsługa pamięci dzielonej**  
+
+- Tworzy klucz `ftok`, pobiera segment pamięci dzielonej (`shmget`).  
+- Dołącza pamięć dzieloną (`shmat`) i uzyskuje wskaźnik do licznika klientów.  
+
+**3. Obsługa sygnału SIGUSR1 (pożar)**  
+
+- Rejestruje funkcję `handle_sigusr1`, która ustawia flagę `fire_alarm = 1`.  
+
+**4. Główna pętla programu (obsługa klientów)**  
+
+- Sprawdza liczbę klientów w sklepie (`customer_count = *shm_ptr`).  
+- Obsługuje komunikaty z kolejki (`msgrcv`) od klientów:  
+  - Jeśli `mtype == 1`:  
+    - Klient ustawia się w kolejce do kasy z najmniejszą liczbą klientów.  
+    - Powiadamia kasjera (`pthread_cond_signal`).  
+  - Jeśli `mtype == 2`:  
+    - Klient opuszcza kasę, oznaczając ją jako wolną (`zajeta = 0`).  
+
+**5. Zarządzanie liczbą kas**  
+
+- Oblicza liczbę wymaganych kas (`required_cashiers = customer_count / K + 1`).  
+- Zawsze otwarte są min. 2 kasy.  
+- Jeśli klientów jest dużo – otwiera nową kasę.  
+- Jeśli klientów jest mało – zamyka kasę.  
+
+**6. Obsługa klientów przez kasjera (wątek cashier_thread)**  
+
+- Czeka na klientów w kolejce (`pthread_cond_wait`).  
+- Obsługuje pierwszego klienta i wysyła mu komunikat (`msgsnd`).  
+- Czeka, aż klient opuści kasę (`zajeta = 0`).  
+- Powtarza procedurę.  
+
+**7. Reakcja na pożar (SIGUSR1)**  
+
+- Gdy `fire_alarm = 1`, program:  
+  - Wypisuje komunikat `"POŻAR! Zamykanie kas..."`.  
+  - Zamknie wszystkie kasy i zakończy działanie.  
+
+**8. Zakończenie programu**  
+
+- Odłącza pamięć dzieloną (`shmdt`).  
+- Kończy działanie.  
+
+
+### firefighter.c
+
+**1. Inicjalizacja**  
+
+- Program inicjalizuje generator liczb losowych (`srand(time(NULL))`).  
+- Pobiera `msgid` z argumentów wywołania, czyli identyfikator kolejki komunikatów.  
+
+**2. Symulacja pożaru**  
+
+- Program czeka losowy czas od 20 do 120 sekund (`sleep(rand() % 100 + 20)`).  
+- Po upływie tego czasu generuje sygnał pożaru (`SIGUSR1`).  
+
+**3. Wysłanie sygnału SIGUSR1**  
+
+- Funkcja `kill(0, SIGUSR1)` wysyła sygnał `SIGUSR1` do wszystkich procesów w grupie.  
+- Procesy odbierające ten sygnał (np. kasjerzy i kierownik) podejmują odpowiednie działania – zamykają kasy i kończą działanie.  
+
+**4. Komunikat o pożarze**  
+
+- Program wypisuje `"POŻAR! Wszyscy klienci opuszczają sklep!"`, informując o ewakuacji.  
+- Następnie kończy działanie.  
