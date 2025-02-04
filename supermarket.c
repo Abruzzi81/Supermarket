@@ -8,11 +8,18 @@
 #include <sys/shm.h>
 #include "common.h"
 
+
+
+#include <dirent.h>
+#include <ctype.h>
+#include <string.h>
+
 #define SHM_SIZE sizeof(int) + sizeof(pthread_mutex_t) // pamięć dla int + mutex
 
 int msgid; //id kolejki komunikatow
 void *shm_addr; //wskaznik do przylaczonego segmentu pamieci dzielonej
 int shmid;
+
 
 // Funkcja obsługi sygnału SIGINT
 void handle_sigint(int sig) {
@@ -21,7 +28,7 @@ void handle_sigint(int sig) {
     for (int i = 0; i < MAX_CUSTOMERS + 2; i++) {
         wait(NULL);
     }
-
+	
     // Usunięcie kolejki komunikatów
     msgctl(msgid, IPC_RMID, NULL);
 	
@@ -43,6 +50,9 @@ void handle_sigint(int sig) {
 }
 
 int main() {
+
+	srand(time(NULL));
+	
 	// Rejestracja funkcji obsługi sygnału SIGINT
     if (signal(SIGINT, handle_sigint) == SIG_ERR) {
         perror("Nie udało się zarejestrować obsługi sygnału");
@@ -51,7 +61,7 @@ int main() {
 	
 	
     // Inicjalizacja kolejki komunikatów
-    msgid = msgget(IPC_PRIVATE, 0666 | IPC_CREAT);
+    msgid = msgget(IPC_PRIVATE, 0600 | IPC_CREAT);
     if (msgid == -1) {
         perror("msgget");
         exit(1);
@@ -59,7 +69,7 @@ int main() {
 	
 	// Tworzenie pamięci dzielonej
 	key_t key = ftok("shmfile", 'A');  // Tworzenie unikalnego klucza
-    shmid = shmget(key, SHM_SIZE, IPC_CREAT | 0666);
+    shmid = shmget(key, SHM_SIZE, IPC_CREAT | 0600);
 
     if (shmid == -1) {
         perror("shmget");
@@ -119,11 +129,11 @@ int main() {
             perror("execl customer");
             exit(1);
         }
-        sleep(1);  // Opóźnienie między tworzeniem klientów
+        sleep(rand() % 3 + 1);  // Opóźnienie między tworzeniem klientów (miedzy 1 a 5 sekund)
     }
 
     // Oczekiwanie na zakończenie procesów
-    for (int i = 0; i < MAX_CUSTOMERS + 2; i++) {
+    for (int i = 0; i < MAX_CUSTOMERS; i++) {
         wait(NULL);
     }
 
@@ -143,6 +153,20 @@ int main() {
         exit(1);
     }
 
-    printf("Supermarket zamknięty.\n");
+   printf("Supermarket zamknięty.\n");
+	
+	
+	if (kill(firefighter_pid, SIGTERM) == 0) {  // Wysyłanie sygnału SIGTERM
+		printf("Wysłano SIGTERM do procesu potomnego o PID: %d\n", firefighter_pid);
+	} else {
+		perror("Błąd podczas wysyłania sygnału");
+	}
+		
+	if (kill(manager_pid, SIGTERM) == 0) {  // Wysyłanie sygnału SIGTERM
+		printf("Wysłano SIGTERM do procesu potomnego o PID: %d\n", manager_pid);
+	} else {
+		perror("Błąd podczas wysyłania sygnału");
+	}
+
     return 0;
 }
