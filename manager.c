@@ -1,3 +1,4 @@
+
 #include "common.h"
 #include <signal.h>
 
@@ -44,7 +45,7 @@ void* cashier_thread(void *arg) {
 		
         // Wysłanie odpowiedzi do klienta
 		message_t response;
-        response.mtype = (long)klient_id + 1;  // Unikalny typ komunikatu dla klienta
+        response.mtype = (long)klient_id + 3;  // Unikalny typ komunikatu dla klienta
         response.customer_id = klient_id;
         response.cashier_id = kasa->id + 1;  // Numeracja kas od 1
         if (msgsnd(msgid, &response, sizeof(response), 0) == -1) {
