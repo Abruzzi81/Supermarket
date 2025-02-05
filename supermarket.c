@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -20,6 +21,36 @@ int msgid; //id kolejki komunikatow
 void *shm_addr; //wskaznik do przylaczonego segmentu pamieci dzielonej
 int shmid;
 
+// Funkcja obsługi sygnału SIGUSR1
+void handle_sigusr1(int sig) {
+	printf("POZAR!!! Zamkniecie sklepu!!!\n");
+	
+	// Oczekiwanie na zakończenie procesów
+    for (int i = 0; i < MAX_CUSTOMERS + 2; i++) {
+        wait(NULL);
+    }
+	
+    // Usunięcie kolejki komunikatów
+    if (msgctl(msgid, IPC_RMID, NULL) == -1) {
+        perror("msgctl (usuniecie kolejki)");
+        exit(1);
+    }
+	
+	// Odłączenie segmentu pamięci dzielonej
+    if (shmdt(shm_addr) == -1) {
+        perror("shmdt");
+        exit(1);
+    }
+	
+	// Usuwanie pamięci dzielonej
+    if (shmctl(shmid, IPC_RMID, NULL) == -1) {
+        perror("shmctl IPC_RMID");
+        exit(1);
+    }
+	
+	printf("\nSygnał SIGUSR1 odebrany! Proces zakończony.\n");
+    exit(0);  // Zakończenie programu
+}
 
 // Funkcja obsługi sygnału SIGINT
 void handle_sigint(int sig) {
@@ -30,8 +61,10 @@ void handle_sigint(int sig) {
     }
 	
     // Usunięcie kolejki komunikatów
-    msgctl(msgid, IPC_RMID, NULL);
-	
+    if (msgctl(msgid, IPC_RMID, NULL) == -1) {
+        perror("msgctl (usuniecie kolejki)");
+        exit(1);
+    }
 	
 	// Odłączenie segmentu pamięci dzielonej
     if (shmdt(shm_addr) == -1) {
@@ -55,6 +88,11 @@ int main() {
 	
 	// Rejestracja funkcji obsługi sygnału SIGINT
     if (signal(SIGINT, handle_sigint) == SIG_ERR) {
+        perror("Nie udało się zarejestrować obsługi sygnału");
+        exit(1);
+    }
+	// Rejestracja funkcji obsługi sygnału SIGUSR1
+    if (signal(SIGUSR1, handle_sigusr1) == SIG_ERR) {
         perror("Nie udało się zarejestrować obsługi sygnału");
         exit(1);
     }
