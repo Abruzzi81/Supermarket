@@ -273,4 +273,8 @@ Po zakończeniu wszystkich procesów klientów, program:
 **4. Komunikat o pożarze**  
 
 - Program wypisuje `"POŻAR! Wszyscy klienci opuszczają sklep!"`, informując o ewakuacji.  
-- Następnie kończy działanie.  
+- Następnie kończy działanie.
+
+## Poprawa błędu SIGUSR1
+Po wysłaniu sygnału przez strazaka wszystkie zasoby zostają wyczyszczone (pamięć współdzielona i kolejka komunikatów)
+
