@@ -1,3 +1,4 @@
+
 #include "common.h"
 #include <signal.h>
 
@@ -12,7 +13,7 @@ int main(int argc, char *argv[]) {
     int msgid = atoi(argv[1]);  // Pobierz identyfikator kolejki
 
     // Symulacja wykrycia pożaru
-    sleep(rand() % 100 + 20);  // Pożar w losowym czasie
+    sleep(rand() % 20 + 10);  // Pożar w losowym czasie
 
     // Wysłanie sygnału do wszystkich procesów
     kill(0, SIGUSR1);  // Wysyłanie sygnału do grupy procesów
