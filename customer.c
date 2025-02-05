@@ -1,20 +1,10 @@
+
 #include "common.h"
 
 pthread_mutex_t *mutex;
 void *shm_addr;
 int customer_id;
 
-// Funkcja obsługi sygnału SIGUSR1
-void handle_sigusr1(int sig) {
-	
-	printf("Klient %d opuscil sklep\n", customer_id);
-    // Odłączenie segmentu pamięci dzielonej
-    if (shmdt(shm_addr) == -1) {
-        perror("shmdt");
-        exit(1);
-    }
-	kill(getpid(), SIGKILL);  // Wysłanie SIGKILL do własnego procesu
-}
 
 int main(int argc, char *argv[]) {
 	srand(time(NULL));
@@ -70,8 +60,6 @@ int main(int argc, char *argv[]) {
     customer_id = atoi(argv[1]);
     int msgid = atoi(argv[2]);  // Pobierz identyfikator kolejki
 	
-	// Rejestracja obsługi sygnału SIGUSR1
-    signal(SIGUSR1, handle_sigusr1);
 	
     printf("Klient %d wszedł do sklepu.\n", customer_id);
 
@@ -89,7 +77,7 @@ int main(int argc, char *argv[]) {
 
     // Oczekiwanie na odpowiedź od kierownika (przydział do kasy)
     message_t response;
-    if (msgrcv(msgid, &response, sizeof(response), customer_id + 1, 0) == -1) {
+    if (msgrcv(msgid, &response, sizeof(response), customer_id + 3, 0) == -1) {
         perror("msgrcv");
         exit(1);
     }
